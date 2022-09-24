@@ -35,7 +35,7 @@ REQUIREMENTS:
 
 [*] HARDWARE REQUIREMENTS: fast GPU (Graphics Processing Unit)
 
-[*] DEPENDENCIES: INCLUDED
+[*] DEPENDENCIES: [DOCKERFILES INCLUDED]
 
 =============================================================
 
