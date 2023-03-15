@@ -13,8 +13,9 @@ from fvcore.common.param_scheduler import (
 )
 
 from detectron2.config import CfgNode
+from detectron2.utils.env import TORCH_VERSION
 
-from .lr_scheduler import LRMultiplier, WarmupParamScheduler
+from .lr_scheduler import LRMultiplier, LRScheduler, WarmupParamScheduler
 
 _GradientClipperInput = Union[torch.Tensor, Iterable[torch.Tensor]]
 _GradientClipper = Callable[[_GradientClipperInput], None]
@@ -126,13 +127,16 @@ def build_optimizer(cfg: CfgNode, model: torch.nn.Module) -> torch.optim.Optimiz
         bias_lr_factor=cfg.SOLVER.BIAS_LR_FACTOR,
         weight_decay_bias=cfg.SOLVER.WEIGHT_DECAY_BIAS,
     )
-    return maybe_add_gradient_clipping(cfg, torch.optim.SGD)(
-        params,
-        lr=cfg.SOLVER.BASE_LR,
-        momentum=cfg.SOLVER.MOMENTUM,
-        nesterov=cfg.SOLVER.NESTEROV,
-        weight_decay=cfg.SOLVER.WEIGHT_DECAY,
-    )
+    sgd_args = {
+        "params": params,
+        "lr": cfg.SOLVER.BASE_LR,
+        "momentum": cfg.SOLVER.MOMENTUM,
+        "nesterov": cfg.SOLVER.NESTEROV,
+        "weight_decay": cfg.SOLVER.WEIGHT_DECAY,
+    }
+    if TORCH_VERSION >= (1, 12):
+        sgd_args["foreach"] = True
+    return maybe_add_gradient_clipping(cfg, torch.optim.SGD(**sgd_args))
 
 
 def get_default_optimizer_params(
@@ -263,9 +267,7 @@ def reduce_param_groups(params: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return ret
 
 
-def build_lr_scheduler(
-    cfg: CfgNode, optimizer: torch.optim.Optimizer
-) -> torch.optim.lr_scheduler._LRScheduler:
+def build_lr_scheduler(cfg: CfgNode, optimizer: torch.optim.Optimizer) -> LRScheduler:
     """
     Build a LR scheduler from config.
     """

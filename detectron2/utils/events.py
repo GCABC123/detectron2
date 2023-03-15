@@ -230,15 +230,21 @@ class CommonMetricPrinter(EventWriter):
             return
 
         try:
-            data_time = storage.history("data_time").avg(20)
+            avg_data_time = storage.history("data_time").avg(
+                storage.count_samples("data_time", self._window_size)
+            )
+            last_data_time = storage.history("data_time").latest()
         except KeyError:
             # they may not exist in the first few iterations (due to warmup)
             # or when SimpleTrainer is not used
-            data_time = None
+            avg_data_time = None
+            last_data_time = None
         try:
-            iter_time = storage.history("time").global_avg()
+            avg_iter_time = storage.history("time").global_avg()
+            last_iter_time = storage.history("time").latest()
         except KeyError:
-            iter_time = None
+            avg_iter_time = None
+            last_iter_time = None
         try:
             lr = "{:.5g}".format(storage.history("lr").latest())
         except KeyError:
@@ -253,18 +259,41 @@ class CommonMetricPrinter(EventWriter):
 
         # NOTE: max_mem is parsed by grep in "dev/parse_results.sh"
         self.logger.info(
-            " {eta}iter: {iter}  {losses}  {time}{data_time}lr: {lr}  {memory}".format(
+            str.format(
+                " {eta}iter: {iter}  {losses}  {non_losses}  {avg_time}{last_time}"
+                + "{avg_data_time}{last_data_time} lr: {lr}  {memory}",
                 eta=f"eta: {eta_string}  " if eta_string else "",
                 iter=iteration,
                 losses="  ".join(
                     [
-                        "{}: {:.4g}".format(k, v.median(self._window_size))
+                        "{}: {:.4g}".format(
+                            k, v.median(storage.count_samples(k, self._window_size))
+                        )
                         for k, v in storage.histories().items()
                         if "loss" in k
                     ]
                 ),
-                time="time: {:.4f}  ".format(iter_time) if iter_time is not None else "",
-                data_time="data_time: {:.4f}  ".format(data_time) if data_time is not None else "",
+                non_losses="  ".join(
+                    [
+                        "{}: {:.4g}".format(
+                            k, v.median(storage.count_samples(k, self._window_size))
+                        )
+                        for k, v in storage.histories().items()
+                        if "[metric]" in k
+                    ]
+                ),
+                avg_time="time: {:.4f}  ".format(avg_iter_time)
+                if avg_iter_time is not None
+                else "",
+                last_time="last_time: {:.4f}  ".format(last_iter_time)
+                if last_iter_time is not None
+                else "",
+                avg_data_time="data_time: {:.4f}  ".format(avg_data_time)
+                if avg_data_time is not None
+                else "",
+                last_data_time="last_data_time: {:.4f}  ".format(last_data_time)
+                if last_data_time is not None
+                else "",
                 lr=lr,
                 memory="max_mem: {:.0f}M".format(max_mem_mb) if max_mem_mb is not None else "",
             )
@@ -407,14 +436,33 @@ class EventStorage:
         depend on whether the smoothing_hint is True.
 
         This provides a default behavior that other writers can use.
+
+        Note: All scalars saved in the past `window_size` iterations are used for smoothing.
+        This is different from the `window_size` definition in HistoryBuffer.
+        Use :meth:`get_history_window_size` to get the `window_size` used in HistoryBuffer.
         """
         result = {}
         for k, (v, itr) in self._latest_scalars.items():
             result[k] = (
-                self._history[k].median(window_size) if self._smoothing_hints[k] else v,
+                self._history[k].median(self.count_samples(k, window_size))
+                if self._smoothing_hints[k]
+                else v,
                 itr,
             )
         return result
+
+    def count_samples(self, name, window_size=20):
+        """
+        Return the number of samples logged in the past `window_size` iterations.
+        """
+        samples = 0
+        data = self._history[name].values()
+        for _, iter_ in reversed(data):
+            if iter_ > data[-1][1] - window_size:
+                samples += 1
+            else:
+                break
+        return samples
 
     def smoothing_hints(self):
         """
